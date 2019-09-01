@@ -87,7 +87,7 @@ func main() {
 				}
 
 				wg.Add(1)
-				movedMessageCount += 1
+				movedMessageCount++
 
 				defer wg.Done()
 
