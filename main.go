@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"regexp"
 	"sync"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -15,9 +16,13 @@ func main() {
 	src := flag.String("src", "", "source queue")
 	dest := flag.String("dest", "", "destination queue")
 	limit := flag.Int("limit", -1, "limit number of messages moved")
+	include := flag.String("include", "", "move messages matching pattern")
+
 	flag.Parse()
 
-	if *src == "" || *dest == "" || *limit < -1 {
+	includeRegex, err := regexp.Compile(*include)
+
+	if *src == "" || *dest == "" || *limit < -1 || err != nil {
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -73,6 +78,10 @@ func main() {
 		for _, m := range resp.Messages {
 			go func(m *sqs.Message) {
 
+				if !includeRegex.MatchString(*m.Body) {
+					return
+				}
+
 				if *limit != -1 && movedMessageCount >= *limit {
 					return
 				}
@@ -112,7 +121,6 @@ func main() {
 
 		// wait for all jobs from this batch...
 		wg.Wait()
-
 
 		if *limit != -1 && movedMessageCount >= *limit {
 			log.Printf("done, moved %v messages", movedMessageCount)
