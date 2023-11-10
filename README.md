@@ -7,7 +7,7 @@ Move all messages from one SQS queue, to another.
 
 ### Source
 
-    go get github.com/scottjbarr/sqsmv
+    go get github.com/frodeaa/sqsmv
 
 
 ### Binaries
