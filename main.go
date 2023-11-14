@@ -2,19 +2,20 @@ package main
 
 import (
 	"flag"
-	"log"
-	"os"
-	"sync"
-
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sqs"
+	"log"
+	"os"
+	"sync"
+	"sync/atomic"
 )
 
 func main() {
 	src := flag.String("src", "", "source queue")
 	dest := flag.String("dest", "", "destination queue")
 	clients := flag.Int("clients", 1, "number of clients")
+	limit := flag.Int("limit", -1, "limit number of messages moved")
 	flag.Parse()
 
 	if *src == "" || *dest == "" || *clients < 1 {
@@ -25,6 +26,7 @@ func main() {
 	log.Printf("source queue : %v", *src)
 	log.Printf("destination queue : %v", *dest)
 	log.Printf("number of clients : %v", *clients)
+	log.Printf("limit : %v", *limit)
 
 	// enable automatic use of AWS_PROFILE like awscli and other tools do.
 	opts := session.Options{
@@ -47,18 +49,20 @@ func main() {
 		MessageAttributeNames: messageAttributeNames,
 	}
 
+	var messagesMoved atomic.Int64
+	var lock = sync.Mutex{}
 	var wg sync.WaitGroup
+
 	for i := 1; i <= *clients; i++ {
 		wg.Add(i)
-		go transferMessages(sess, rmin, dest, &wg)
+		go transferMessages(sess, rmin, dest, &wg, *limit, &messagesMoved, &lock)
 	}
 	wg.Wait()
-
-	log.Println("all done")
+	log.Printf("all done, moved %v messages", messagesMoved.Load())
 }
 
-//transferMessages loops, transferring a number of messages from the src to the dest at an interval.
-func transferMessages(theSession *session.Session, rmin *sqs.ReceiveMessageInput, dest *string, wgOuter *sync.WaitGroup) {
+// transferMessages loops, transferring a number of messages from the src to the dest at an interval.
+func transferMessages(theSession *session.Session, rmin *sqs.ReceiveMessageInput, dest *string, wgOuter *sync.WaitGroup, limit int, messagesMoved *atomic.Int64, l *sync.Mutex) {
 	client := sqs.New(theSession)
 
 	lastMessageCount := int(1)
@@ -96,11 +100,25 @@ func transferMessages(theSession *session.Session, rmin *sqs.ReceiveMessageInput
 					QueueUrl:          dest,
 				}
 
+				if limit != -1 {
+					l.Lock()
+					defer l.Unlock()
+					if int(messagesMoved.Load()) >= limit {
+						return
+					}
+				}
+
 				_, err := client.SendMessage(&smi)
 
 				if err != nil {
 					log.Printf("ERROR sending message to destination %v", err)
 					return
+				}
+
+				messagesMoved.Add(1)
+
+				if limit != -1 {
+					l.Unlock()
 				}
 
 				// message was sent, dequeue from source queue
