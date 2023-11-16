@@ -2,6 +2,8 @@ package main
 
 import (
 	"flag"
+	"regexp"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sqs"
@@ -16,9 +18,12 @@ func main() {
 	dest := flag.String("dest", "", "destination queue")
 	clients := flag.Int("clients", 1, "number of clients")
 	limit := flag.Int("limit", -1, "limit number of messages moved")
+	include := flag.String("include", "", "don't exclude message that match the specified pattern")
 	flag.Parse()
 
-	if *src == "" || *dest == "" || *clients < 1 {
+	includeRegex, err := regexp.Compile(*include)
+
+	if *src == "" || *dest == "" || *clients < 1 || err != nil {
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -27,6 +32,7 @@ func main() {
 	log.Printf("destination queue : %v", *dest)
 	log.Printf("number of clients : %v", *clients)
 	log.Printf("limit : %v", *limit)
+	log.Printf("include : %v", *include)
 
 	// enable automatic use of AWS_PROFILE like awscli and other tools do.
 	opts := session.Options{
@@ -51,18 +57,24 @@ func main() {
 
 	var messagesMoved atomic.Int64
 	var lock = sync.Mutex{}
+
+	if *include != "" {
+		visibilityTimeout := int64(120)
+		rmin.VisibilityTimeout = &visibilityTimeout
+	}
+
 	var wg sync.WaitGroup
 
 	for i := 1; i <= *clients; i++ {
 		wg.Add(i)
-		go transferMessages(sess, rmin, dest, &wg, *limit, &messagesMoved, &lock)
+		go transferMessages(sess, rmin, dest, &wg, *limit, &messagesMoved, &lock, includeRegex)
 	}
 	wg.Wait()
 	log.Printf("all done, moved %v messages", messagesMoved.Load())
 }
 
 // transferMessages loops, transferring a number of messages from the src to the dest at an interval.
-func transferMessages(theSession *session.Session, rmin *sqs.ReceiveMessageInput, dest *string, wgOuter *sync.WaitGroup, limit int, messagesMoved *atomic.Int64, l *sync.Mutex) {
+func transferMessages(theSession *session.Session, rmin *sqs.ReceiveMessageInput, dest *string, wgOuter *sync.WaitGroup, limit int, messagesMoved *atomic.Int64, l *sync.Mutex, includeRegex *regexp.Regexp) {
 	client := sqs.New(theSession)
 
 	lastMessageCount := int(1)
@@ -92,6 +104,10 @@ func transferMessages(theSession *session.Session, rmin *sqs.ReceiveMessageInput
 		for _, m := range resp.Messages {
 			go func(m *sqs.Message) {
 				defer wg.Done()
+
+				if !includeRegex.MatchString(*m.Body) {
+					return
+				}
 
 				// write the message to the destination queue
 				smi := sqs.SendMessageInput{
