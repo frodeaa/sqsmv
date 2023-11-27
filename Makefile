@@ -22,8 +22,8 @@ prepare:
 	mkdir -p build dist
 
 tools:
-	go get golang.org/x/tools/cmd/goimports
-	go get golang.org/x/lint/golint
+	go install golang.org/x/tools/cmd/goimports@latest
+	go install golang.org/x/lint/golint@latest
 
 lint: golint vet goimports vet
 
