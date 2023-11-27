@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"regexp"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -9,9 +10,21 @@ import (
 	"github.com/aws/aws-sdk-go/service/sqs"
 	"log"
 	"os"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 )
+
+var Commit = func() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" {
+				return setting.Value
+			}
+		}
+	}
+	return ""
+}()
 
 func main() {
 	src := flag.String("src", "", "source queue")
@@ -19,7 +32,13 @@ func main() {
 	clients := flag.Int("clients", 1, "number of clients")
 	limit := flag.Int("limit", -1, "limit number of messages moved")
 	include := flag.String("include", "", "don't exclude message that match the specified pattern")
+	version := flag.Bool("version", false, "display the version")
 	flag.Parse()
+
+	if *version {
+		fmt.Printf("sqsmv/%s\n", Commit)
+		os.Exit(0)
+	}
 
 	includeRegex, err := regexp.Compile(*include)
 
