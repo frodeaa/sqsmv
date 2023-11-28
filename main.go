@@ -77,7 +77,6 @@ func main() {
 	}
 
 	var messagesMoved atomic.Int64
-	var lock = sync.Mutex{}
 
 	if *include != "" {
 		visibilityTimeout := int64(120)
@@ -88,14 +87,14 @@ func main() {
 
 	for i := 1; i <= *clients; i++ {
 		wg.Add(i)
-		go transferMessages(sess, rmin, dest, &wg, *limit, &messagesMoved, &lock, includeRegex)
+		go transferMessages(sess, rmin, dest, &wg, *limit, &messagesMoved, includeRegex)
 	}
 	wg.Wait()
 	log.Printf("all done, moved %v messages", messagesMoved.Load())
 }
 
 // transferMessages loops, transferring a number of messages from the src to the dest at an interval.
-func transferMessages(theSession *session.Session, rmin *sqs.ReceiveMessageInput, dest *string, wgOuter *sync.WaitGroup, limit int, messagesMoved *atomic.Int64, l *sync.Mutex, includeRegex *regexp.Regexp) {
+func transferMessages(theSession *session.Session, rmin *sqs.ReceiveMessageInput, dest *string, wgOuter *sync.WaitGroup, limit int, messagesMoved *atomic.Int64, includeRegex *regexp.Regexp) {
 	client := sqs.New(theSession)
 
 	lastMessageCount := int(1)
@@ -108,6 +107,11 @@ func transferMessages(theSession *session.Session, rmin *sqs.ReceiveMessageInput
 
 		if err != nil {
 			panic(err)
+		}
+
+		if limit != -1 && int(messagesMoved.Load()) > limit-1 {
+			log.Printf("done")
+			return
 		}
 
 		if lastMessageCount == 0 && len(resp.Messages) == 0 {
@@ -137,12 +141,8 @@ func transferMessages(theSession *session.Session, rmin *sqs.ReceiveMessageInput
 					QueueUrl:          dest,
 				}
 
-				if limit != -1 {
-					l.Lock()
-					defer l.Unlock()
-					if int(messagesMoved.Load()) >= limit {
-						return
-					}
+				if limit != -1 && int(messagesMoved.Load()) > limit-1 {
+					return
 				}
 
 				_, err := client.SendMessage(&smi)
@@ -153,10 +153,6 @@ func transferMessages(theSession *session.Session, rmin *sqs.ReceiveMessageInput
 				}
 
 				messagesMoved.Add(1)
-
-				if limit != -1 {
-					l.Unlock()
-				}
 
 				// message was sent, dequeue from source queue
 				dmi := &sqs.DeleteMessageInput{
